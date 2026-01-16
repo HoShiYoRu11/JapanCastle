@@ -1,0 +1,742 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>KML 進階編輯器 (Standalone)</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Babel for JSX compilation in browser -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <!-- Import Map to allow 'import' syntax with CDNs -->
+    <script type="importmap">
+    {
+        "imports": {
+            "react": "https://esm.sh/react@18.2.0",
+            "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+            "lucide-react": "https://esm.sh/lucide-react@0.344.0"
+        }
+    }
+    </script>
+    
+    <style>
+        /* Custom scrollbar for better aesthetics */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #f1f5f9; 
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #cbd5e1; 
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #94a3b8; 
+        }
+        /* Hide scrollbar for clean UI but keep functionality */
+        .no-scrollbar::-webkit-scrollbar {
+            display: none;
+        }
+        .no-scrollbar {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-800">
+    <div id="root"></div>
+
+    <!-- Application Logic -->
+    <script type="text/babel" data-type="module">
+        import React, { useState, useRef, useCallback } from 'react';
+        import { createRoot } from 'react-dom/client';
+        import { Upload, Download, FileCode, AlertCircle, CheckCircle, RefreshCw, GripVertical, Copy, X, ArrowRight, ChevronDown, Eraser, Search } from 'lucide-react';
+
+        function App() {
+            // --- State Management ---
+            const [kmlDoc, setKmlDoc] = useState(null);
+            const [rows, setRows] = useState([]);
+            const [columns, setColumns] = useState([]);
+            const [fileName, setFileName] = useState('');
+            const [status, setStatus] = useState({ type: 'idle', msg: '' });
+            const [isProcessing, setIsProcessing] = useState(false);
+
+            // Column Resizing State
+            const [resizingCol, setResizingCol] = useState(null);
+            const startX = useRef(0);
+            const startWidth = useRef(0);
+
+            // Batch Tool State
+            const [isCopyToolOpen, setIsCopyToolOpen] = useState(false);
+            const [copySource, setCopySource] = useState('');
+            const [copyTarget, setCopyTarget] = useState('');
+
+            // Clear Tool State
+            const [isClearToolOpen, setIsClearToolOpen] = useState(false);
+            const [clearTarget, setClearTarget] = useState('');
+            const [clearMode, setClearMode] = useState('all'); // 'all' | 'pattern'
+            const [clearPattern, setClearPattern] = useState('');
+            const [useRegex, setUseRegex] = useState(false);
+
+            // --- Handlers ---
+
+            const handleFileUpload = (event) => {
+                const file = event.target.files?.[0];
+                if (!file) return;
+
+                setIsProcessing(true);
+                setFileName(file.name);
+                
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    try {
+                        const text = e.target?.result;
+                        const parser = new DOMParser();
+                        const xml = parser.parseFromString(text, "text/xml");
+                        
+                        const parserError = xml.getElementsByTagName("parsererror");
+                        if (parserError.length > 0) throw new Error("無法解析 KML 檔案，格式可能錯誤。");
+
+                        parseKmlData(xml);
+                        setStatus({ type: 'success', msg: '檔案讀取成功！已自動提取座標與資料夾資訊。' });
+                    } catch (err) {
+                        setStatus({ type: 'error', msg: err.message || '讀取檔案時發生錯誤' });
+                        setKmlDoc(null);
+                        setRows([]);
+                    } finally {
+                        setIsProcessing(false);
+                    }
+                };
+                reader.readAsText(file);
+            };
+
+            const parseKmlData = (xml) => {
+                setKmlDoc(xml);
+                const placemarks = xml.getElementsByTagName("Placemark");
+                const extractedRows = [];
+                const extendedKeys = new Set();
+
+                for (let i = 0; i < placemarks.length; i++) {
+                    const pm = placemarks[i];
+                    
+                    // 1. Basic Info
+                    const nameNode = pm.getElementsByTagName("name")[0];
+                    const descNode = pm.getElementsByTagName("description")[0];
+                    
+                    // 2. Folder Info (Traverse Up)
+                    let folderName = '根目錄';
+                    let parent = pm.parentNode;
+                    while (parent) {
+                        if (parent.nodeName === 'Folder') {
+                            const folderNameNode = parent.getElementsByTagName('name')[0];
+                            if (folderNameNode) {
+                                folderName = folderNameNode.textContent || '未命名資料夾';
+                            }
+                            break; 
+                        }
+                        parent = parent.parentNode;
+                    }
+
+                    // 3. Coordinates (Point -> coordinates)
+                    let lat = '', lon = '', alt = '';
+                    const pointNode = pm.getElementsByTagName('Point')[0];
+                    if (pointNode) {
+                        const coordsNode = pointNode.getElementsByTagName('coordinates')[0];
+                        if (coordsNode && coordsNode.textContent) {
+                            const rawCoords = coordsNode.textContent.trim();
+                            const parts = rawCoords.split(/[\s,]+/); 
+                            if (parts.length >= 2) {
+                                lon = parts[0];
+                                lat = parts[1];
+                                alt = parts[2] || '0';
+                            }
+                        }
+                    }
+
+                    const row = {
+                        id: i,
+                        name: nameNode ? nameNode.textContent || '' : '',
+                        description: descNode ? descNode.textContent || '' : '',
+                        folder: folderName,
+                        lat,
+                        lon,
+                        alt,
+                        extendedData: {}
+                    };
+
+                    // 4. ExtendedData
+                    const dataNodes = pm.getElementsByTagName("Data");
+                    for (let j = 0; j < dataNodes.length; j++) {
+                        const key = dataNodes[j].getAttribute("name");
+                        const valueNode = dataNodes[j].getElementsByTagName("value")[0];
+                        if (key) {
+                            extendedKeys.add(key);
+                            row.extendedData[key] = valueNode ? valueNode.textContent || '' : '';
+                        }
+                    }
+
+                    const simpleDataNodes = pm.getElementsByTagName("SimpleData");
+                    for (let j = 0; j < simpleDataNodes.length; j++) {
+                        const key = simpleDataNodes[j].getAttribute("name");
+                        if (key) {
+                            extendedKeys.add(key);
+                            row.extendedData[key] = simpleDataNodes[j].textContent || '';
+                        }
+                    }
+
+                    extractedRows.push(row);
+                }
+
+                // Create Columns
+                const newColumns = [
+                    { key: 'folder', label: '資料夾 (Folder)', isExtended: false, width: 120, readOnly: true },
+                    { key: 'name', label: '名稱 (Name)', isExtended: false, width: 150 },
+                    { key: 'lat', label: '緯度 (Lat)', isExtended: false, width: 100 },
+                    { key: 'lon', label: '經度 (Lon)', isExtended: false, width: 100 },
+                    { key: 'description', label: '描述 (Description)', isExtended: false, width: 200 },
+                    ...Array.from(extendedKeys).map(key => ({
+                        key: key,
+                        label: key,
+                        isExtended: true,
+                        width: 150
+                    }))
+                ];
+
+                setColumns(newColumns);
+                setRows(extractedRows);
+            };
+
+            const handleCellChange = (rowIndex, colKey, isExtended, value) => {
+                setRows(prev => {
+                    const newRows = [...prev];
+                    const row = { ...newRows[rowIndex] };
+                    
+                    if (isExtended) {
+                        row.extendedData = { ...row.extendedData, [colKey]: value };
+                    } else {
+                        row[colKey] = value;
+                    }
+                    
+                    newRows[rowIndex] = row;
+                    return newRows;
+                });
+            };
+
+            // --- Copy Tool Logic ---
+            const handleCopyExecute = () => {
+                if (!copySource || !copyTarget) {
+                    setStatus({ type: 'error', msg: '請選擇來源與目標欄位' });
+                    return;
+                }
+                
+                if (copySource === copyTarget) {
+                    setStatus({ type: 'error', msg: '來源與目標欄位不能相同' });
+                    return;
+                }
+                
+                const sourceCol = columns.find(c => c.key === copySource);
+                const targetCol = columns.find(c => c.key === copyTarget);
+
+                if (!sourceCol || !targetCol) return;
+
+                setRows(prevRows => {
+                    return prevRows.map(row => {
+                        const newRow = { ...row };
+                        
+                        const sourceValue = sourceCol.isExtended 
+                            ? (row.extendedData[sourceCol.key] || '')
+                            : row[sourceCol.key];
+
+                        if (targetCol.isExtended) {
+                            newRow.extendedData = { ...newRow.extendedData, [targetCol.key]: sourceValue };
+                        } else {
+                            newRow[targetCol.key] = sourceValue;
+                        }
+
+                        return newRow;
+                    });
+                });
+
+                setStatus({ type: 'success', msg: `已將「${sourceCol.label}」複製到「${targetCol.label}」` });
+            };
+
+            // --- Clear Tool Logic ---
+            const handleClearExecute = () => {
+                if (!clearTarget) {
+                    setStatus({ type: 'error', msg: '請選擇要清除的欄位' });
+                    return;
+                }
+
+                const targetCol = columns.find(c => c.key === clearTarget);
+                if (!targetCol) return;
+
+                if (clearMode === 'pattern' && useRegex && clearPattern) {
+                    try {
+                        new RegExp(clearPattern);
+                    } catch (e) {
+                        setStatus({ type: 'error', msg: '正規表達式 (Regex) 格式錯誤，請檢查語法。' });
+                        return;
+                    }
+                }
+                
+                if (clearMode === 'pattern' && !clearPattern) {
+                    setStatus({ type: 'error', msg: '請輸入要移除的關鍵字或規則' });
+                    return;
+                }
+
+                setRows(prevRows => {
+                    return prevRows.map(row => {
+                        const newRow = { ...row };
+                        let value = targetCol.isExtended 
+                            ? (row.extendedData[targetCol.key] || '') 
+                            : row[targetCol.key];
+                        
+                        if (clearMode === 'all') {
+                            value = '';
+                        } else if (clearMode === 'pattern') {
+                            if (useRegex) {
+                                const regex = new RegExp(clearPattern, 'g');
+                                value = value.replace(regex, '');
+                            } else {
+                                value = value.replaceAll(clearPattern, '');
+                            }
+                        }
+
+                        if (targetCol.isExtended) {
+                            newRow.extendedData = { ...newRow.extendedData, [targetCol.key]: value };
+                        } else {
+                            newRow[targetCol.key] = value;
+                        }
+
+                        return newRow;
+                    });
+                });
+
+                if (clearMode === 'all') {
+                    setStatus({ type: 'success', msg: `已清空「${targetCol.label}」的所有內容` });
+                } else {
+                    setStatus({ type: 'success', msg: `已從「${targetCol.label}」移除所有符合規則的內容` });
+                }
+            };
+
+            // --- Export Logic ---
+            const handleExport = () => {
+                if (!kmlDoc) return;
+
+                try {
+                    const placemarks = kmlDoc.getElementsByTagName("Placemark");
+                    
+                    rows.forEach(row => {
+                        if (row.id >= placemarks.length) return;
+                        const pm = placemarks[row.id];
+
+                        // 1. Update Basic
+                        updateTagContent(pm, 'name', row.name);
+                        updateTagContent(pm, 'description', row.description);
+
+                        // 2. Update Point
+                        const pointNode = pm.getElementsByTagName('Point')[0];
+                        if (pointNode && row.lat && row.lon) {
+                            let coordsNode = pointNode.getElementsByTagName('coordinates')[0];
+                            if (!coordsNode) {
+                                coordsNode = kmlDoc.createElement('coordinates');
+                                pointNode.appendChild(coordsNode);
+                            }
+                            coordsNode.textContent = `${row.lon},${row.lat},${row.alt || '0'}`;
+                        }
+
+                        // 3. Update ExtendedData
+                        const dataNodes = pm.getElementsByTagName("Data");
+                        for (let j = 0; j < dataNodes.length; j++) {
+                            const key = dataNodes[j].getAttribute("name");
+                            if (key && row.extendedData[key] !== undefined) {
+                                updateTagContent(dataNodes[j], 'value', row.extendedData[key]);
+                            }
+                        }
+
+                        const simpleDataNodes = pm.getElementsByTagName("SimpleData");
+                        for (let j = 0; j < simpleDataNodes.length; j++) {
+                            const key = simpleDataNodes[j].getAttribute("name");
+                            if (key && row.extendedData[key] !== undefined) {
+                                simpleDataNodes[j].textContent = row.extendedData[key];
+                            }
+                        }
+                    });
+
+                    const serializer = new XMLSerializer();
+                    const xmlString = serializer.serializeToString(kmlDoc);
+                    const blob = new Blob([xmlString], { type: "application/vnd.google-earth.kml+xml" });
+                    const url = URL.createObjectURL(blob);
+                    
+                    const link = document.createElement('a');
+                    link.href = url;
+                    link.download = fileName ? `edited_${fileName}` : 'edited_data.kml';
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                    
+                    setStatus({ type: 'success', msg: '匯出成功！座標已更新。' });
+                } catch (err) {
+                    console.error(err);
+                    setStatus({ type: 'error', msg: '匯出時發生錯誤' });
+                }
+            };
+
+            const updateTagContent = (parent, tagName, value) => {
+                let node = parent.getElementsByTagName(tagName)[0];
+                if (!node && value) {
+                    node = kmlDoc.createElement(tagName);
+                    parent.appendChild(node);
+                }
+                if (node) node.textContent = value;
+            };
+
+            // --- Column Resizing Logic ---
+            const handleMouseDown = (e, key) => {
+                e.preventDefault();
+                setResizingCol(key);
+                startX.current = e.pageX;
+                const col = columns.find(c => c.key === key);
+                startWidth.current = col ? col.width : 100;
+                
+                document.addEventListener('mousemove', handleMouseMove);
+                document.addEventListener('mouseup', handleMouseUp);
+            };
+
+            const handleMouseMove = useCallback((e) => {
+                if (!resizingCol) return;
+                const diff = e.pageX - startX.current;
+                const newWidth = Math.max(50, startWidth.current + diff);
+                
+                setColumns(prev => prev.map(col => 
+                    col.key === resizingCol ? { ...col, width: newWidth } : col
+                ));
+            }, [resizingCol]);
+
+            const handleMouseUp = useCallback(() => {
+                setResizingCol(null);
+                document.removeEventListener('mousemove', handleMouseMove);
+                document.removeEventListener('mouseup', handleMouseUp);
+            }, [handleMouseMove]);
+
+            // --- UI Render ---
+            return (
+                <div className="min-h-screen bg-slate-50 text-slate-800 font-sans flex flex-col relative">
+                    <header className="bg-blue-700 text-white p-4 shadow-lg flex-none">
+                        <div className="container mx-auto flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                                <FileCode size={24} />
+                                <h1 className="text-xl font-bold">KML 進階編輯器 (GitHub Pages 版)</h1>
+                            </div>
+                            <div className="text-sm opacity-80 hidden md:block">
+                                支援：座標提取 • 資料夾檢視 • 批次工具
+                            </div>
+                        </div>
+                    </header>
+
+                    <main className="container mx-auto p-4 md:p-6 flex-1 flex flex-col overflow-hidden">
+                        
+                        {/* Toolbar */}
+                        <div className="bg-white rounded-lg shadow mb-4 flex-none overflow-visible z-30">
+                            <div className="p-4 flex flex-col md:flex-row gap-4 items-center justify-between relative z-30">
+                                <div className="flex items-center gap-2 w-full md:w-auto">
+                                    <label className="flex items-center justify-center gap-2 flex-1 md:w-48 cursor-pointer bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium py-2.5 px-4 rounded-lg border border-slate-300 transition-colors">
+                                        <Upload size={18} />
+                                        <span className="truncate text-sm">{fileName || '匯入 KML'}</span>
+                                        <input type="file" accept=".kml,.xml" onChange={handleFileUpload} className="hidden" />
+                                    </label>
+
+                                    {/* Copy Tool Button */}
+                                    <button 
+                                        onClick={() => { setIsCopyToolOpen(!isCopyToolOpen); setIsClearToolOpen(false); }}
+                                        disabled={rows.length === 0}
+                                        className={`flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg font-medium transition-colors border text-sm ${
+                                            rows.length === 0 ? 'bg-slate-50 text-slate-400 cursor-not-allowed border-slate-200' :
+                                            isCopyToolOpen 
+                                                ? 'bg-blue-100 text-blue-700 border-blue-300 shadow-inner'
+                                                : 'bg-white hover:bg-slate-50 text-slate-700 border-slate-300 shadow-sm'
+                                        }`}
+                                    >
+                                        <Copy size={18} />
+                                        <span className="hidden md:inline">複製工具</span>
+                                        <ChevronDown size={14} className={`transition-transform duration-200 ${isCopyToolOpen ? 'rotate-180' : ''}`}/>
+                                    </button>
+
+                                    {/* Clear Tool Button */}
+                                    <button 
+                                        onClick={() => { setIsClearToolOpen(!isClearToolOpen); setIsCopyToolOpen(false); }}
+                                        disabled={rows.length === 0}
+                                        className={`flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg font-medium transition-colors border text-sm ${
+                                            rows.length === 0 ? 'bg-slate-50 text-slate-400 cursor-not-allowed border-slate-200' :
+                                            isClearToolOpen 
+                                                ? 'bg-red-50 text-red-700 border-red-300 shadow-inner'
+                                                : 'bg-white hover:bg-slate-50 text-slate-700 border-slate-300 shadow-sm'
+                                        }`}
+                                    >
+                                        <Eraser size={18} />
+                                        <span className="hidden md:inline">清理工具</span>
+                                        <ChevronDown size={14} className={`transition-transform duration-200 ${isClearToolOpen ? 'rotate-180' : ''}`}/>
+                                    </button>
+                                </div>
+
+                                <div className="flex-1 flex justify-center w-full">
+                                    {status.msg && (
+                                        <div className={`flex items-center gap-2 px-4 py-2 rounded-full text-xs font-medium ${
+                                            status.type === 'error' ? 'bg-red-100 text-red-700' : 
+                                            status.type === 'success' ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'
+                                        }`}>
+                                            {status.type === 'error' ? <AlertCircle size={14}/> : <CheckCircle size={14}/>}
+                                            {status.msg}
+                                        </div>
+                                    )}
+                                </div>
+
+                                <div className="w-full md:w-auto">
+                                    <button 
+                                        onClick={handleExport}
+                                        disabled={rows.length === 0}
+                                        className={`flex items-center justify-center gap-2 w-full md:w-40 font-medium py-2.5 px-4 rounded-lg shadow transition-all text-sm ${
+                                            rows.length === 0 
+                                                ? 'bg-slate-200 text-slate-400 cursor-not-allowed' 
+                                                : 'bg-green-600 hover:bg-green-700 text-white hover:shadow-lg'
+                                        }`}
+                                    >
+                                        <Download size={18} />
+                                        匯出 KML
+                                    </button>
+                                </div>
+                            </div>
+                            
+                            {/* Copy Tool Panel */}
+                            {isCopyToolOpen && (
+                                <div className="border-t border-slate-100 bg-blue-50/50 p-3">
+                                    <div className="flex flex-col md:flex-row items-center justify-center gap-3">
+                                        <div className="text-xs font-bold text-blue-600 uppercase tracking-wider flex items-center gap-1">
+                                            <Copy size={14}/> 批次複製
+                                        </div>
+                                        
+                                        <div className="flex items-center gap-2 w-full md:w-auto bg-white p-1 rounded-md border border-slate-200 shadow-sm">
+                                            <select 
+                                                value={copySource} 
+                                                onChange={e => setCopySource(e.target.value)}
+                                                className="bg-transparent text-sm p-1.5 focus:outline-none text-slate-700 w-full md:w-32 cursor-pointer"
+                                            >
+                                                <option value="">選擇來源...</option>
+                                                {columns.map(col => (
+                                                    <option key={col.key} value={col.key}>{col.label}</option>
+                                                ))}
+                                            </select>
+
+                                            <ArrowRight size={16} className="text-slate-400 flex-shrink-0" />
+
+                                            <select 
+                                                value={copyTarget} 
+                                                onChange={e => setCopyTarget(e.target.value)}
+                                                className="bg-transparent text-sm p-1.5 focus:outline-none text-slate-700 w-full md:w-32 cursor-pointer"
+                                            >
+                                                <option value="">選擇目標...</option>
+                                                {columns.filter(col => !col.readOnly).map(col => (
+                                                    <option key={col.key} value={col.key}>{col.label}</option>
+                                                ))}
+                                            </select>
+                                        </div>
+
+                                        <button 
+                                            onClick={handleCopyExecute}
+                                            disabled={!copySource || !copyTarget || copySource === copyTarget}
+                                            className={`text-sm px-4 py-1.5 rounded-md font-medium transition-colors ${
+                                                !copySource || !copyTarget || copySource === copyTarget
+                                                ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                                                : 'bg-blue-600 text-white hover:bg-blue-700 shadow-sm'
+                                            }`}
+                                        >
+                                            執行複製
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Clear Tool Panel */}
+                            {isClearToolOpen && (
+                                <div className="border-t border-slate-100 bg-red-50/50 p-3">
+                                    <div className="flex flex-col gap-3">
+                                        <div className="flex flex-col md:flex-row items-center justify-center gap-3">
+                                            <div className="text-xs font-bold text-red-600 uppercase tracking-wider flex items-center gap-1">
+                                                <Eraser size={14}/> 欄位清理
+                                            </div>
+
+                                            <div className="flex items-center gap-2 w-full md:w-auto bg-white p-1 rounded-md border border-slate-200 shadow-sm">
+                                                <select 
+                                                    value={clearTarget} 
+                                                    onChange={e => setClearTarget(e.target.value)}
+                                                    className="bg-transparent text-sm p-1.5 focus:outline-none text-slate-700 w-full md:w-48 cursor-pointer"
+                                                >
+                                                    <option value="">選擇要清理的欄位...</option>
+                                                    {columns.filter(col => !col.readOnly).map(col => (
+                                                        <option key={col.key} value={col.key}>{col.label}</option>
+                                                    ))}
+                                                </select>
+                                            </div>
+
+                                            <div className="flex bg-white p-1 rounded-md border border-slate-200 shadow-sm">
+                                                <button 
+                                                    onClick={() => setClearMode('all')}
+                                                    className={`px-3 py-1.5 text-xs rounded transition-colors ${
+                                                        clearMode === 'all' 
+                                                        ? 'bg-red-100 text-red-700 font-bold' 
+                                                        : 'text-slate-500 hover:bg-slate-50'
+                                                    }`}
+                                                >
+                                                    整欄清空
+                                                </button>
+                                                <div className="w-px bg-slate-200 mx-1 my-0.5"></div>
+                                                <button 
+                                                    onClick={() => setClearMode('pattern')}
+                                                    className={`px-3 py-1.5 text-xs rounded transition-colors ${
+                                                        clearMode === 'pattern' 
+                                                        ? 'bg-red-100 text-red-700 font-bold' 
+                                                        : 'text-slate-500 hover:bg-slate-50'
+                                                    }`}
+                                                >
+                                                    指定內容
+                                                </button>
+                                            </div>
+                                        </div>
+                                        
+                                        {clearMode === 'pattern' && (
+                                            <div className="flex flex-col md:flex-row items-center justify-center gap-3">
+                                                <div className="relative w-full md:w-64">
+                                                    <input 
+                                                        type="text" 
+                                                        placeholder="輸入要移除的關鍵字..." 
+                                                        value={clearPattern}
+                                                        onChange={e => setClearPattern(e.target.value)}
+                                                        className="w-full text-sm pl-8 pr-3 py-2 border border-red-200 rounded-md focus:outline-none focus:ring-2 focus:ring-red-200 bg-white shadow-sm"
+                                                    />
+                                                    <Search size={14} className="absolute left-2.5 top-2.5 text-slate-400" />
+                                                </div>
+                                                
+                                                <label className="flex items-center gap-1.5 text-xs text-slate-700 cursor-pointer select-none bg-white px-2 py-1.5 rounded border border-slate-200 hover:bg-slate-50">
+                                                    <input 
+                                                        type="checkbox" 
+                                                        checked={useRegex} 
+                                                        onChange={e => setUseRegex(e.target.checked)}
+                                                        className="accent-red-600 rounded w-4 h-4"
+                                                    />
+                                                    使用 Regex
+                                                </label>
+                                                
+                                                <div className="text-[10px] text-slate-400 italic">
+                                                    {useRegex ? '範例: \\([0-9]+\\) 可移除所有括號數字' : '將移除所有符合此文字的內容'}
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        <div className="flex justify-center">
+                                            <button 
+                                                onClick={handleClearExecute}
+                                                disabled={!clearTarget || (clearMode === 'pattern' && !clearPattern)}
+                                                className={`text-sm px-8 py-1.5 rounded-md font-medium transition-colors shadow-sm ${
+                                                    !clearTarget || (clearMode === 'pattern' && !clearPattern)
+                                                    ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                                                    : 'bg-red-600 text-white hover:bg-red-700'
+                                                }`}
+                                            >
+                                                {clearMode === 'all' ? '確認清空' : '執行移除'}
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Data Grid */}
+                        {rows.length > 0 ? (
+                            <div className="bg-white rounded-lg shadow flex flex-col flex-1 overflow-hidden border border-slate-200">
+                                <div className="p-3 border-b border-slate-200 bg-slate-50 flex justify-between items-center flex-none">
+                                    <h2 className="font-bold text-slate-700 flex items-center gap-2 text-sm">
+                                        資料列表 <span className="text-xs font-normal text-slate-500 bg-slate-200 px-2 rounded-full">{rows.length} 筆</span>
+                                    </h2>
+                                    <span className="text-xs text-slate-400">拖曳表頭邊緣可調整欄寬</span>
+                                </div>
+                                
+                                <div className="flex-1 overflow-auto relative">
+                                    <table className="text-left border-collapse table-fixed" style={{ width: columns.reduce((acc, col) => acc + col.width, 50) + 'px' }}>
+                                        <thead className="bg-slate-100 sticky top-0 z-10 shadow-sm">
+                                            <tr>
+                                                <th className="p-0 border-b border-r border-slate-300 bg-slate-100 w-[50px] text-center text-xs text-slate-500 font-bold sticky left-0 z-20">
+                                                    #
+                                                </th>
+                                                {columns.map(col => (
+                                                    <th 
+                                                        key={col.key} 
+                                                        className="relative p-0 border-b border-r border-slate-300 bg-slate-100 group select-none"
+                                                        style={{ width: col.width }}
+                                                    >
+                                                        <div className="px-3 py-2 text-xs font-bold text-slate-600 uppercase tracking-wider truncate flex items-center gap-1 h-full">
+                                                            {col.label}
+                                                            {col.readOnly && <span className="text-[9px] bg-slate-200 text-slate-500 px-1 rounded ml-1">READ</span>}
+                                                            {col.isExtended && <span className="text-[9px] bg-blue-100 text-blue-600 px-1 rounded ml-1">EXT</span>}
+                                                        </div>
+                                                        <div 
+                                                            className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-blue-400 group-hover:bg-slate-300 z-10 transition-colors"
+                                                            onMouseDown={(e) => handleMouseDown(e, col.key)}
+                                                        />
+                                                    </th>
+                                                ))}
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-slate-100">
+                                            {rows.map((row, rIndex) => (
+                                                <tr key={rIndex} className="hover:bg-blue-50 transition-colors">
+                                                    <td className="p-2 border-r border-slate-200 text-center text-xs text-slate-400 bg-slate-50 sticky left-0 z-10 font-mono">
+                                                        {rIndex + 1}
+                                                    </td>
+                                                    {columns.map((col) => {
+                                                        const value = col.isExtended ? (row.extendedData[col.key] || '') : row[col.key];
+                                                        return (
+                                                            <td 
+                                                                key={`${rIndex}-${col.key}`} 
+                                                                className={`p-0 border-r border-slate-200 ${col.readOnly ? 'bg-slate-50' : ''}`}
+                                                            >
+                                                                <input
+                                                                    type="text"
+                                                                    value={value}
+                                                                    readOnly={col.readOnly}
+                                                                    onChange={(e) => !col.readOnly && handleCellChange(rIndex, col.key, col.isExtended, e.target.value)}
+                                                                    className={`w-full h-full px-3 py-2 text-sm text-slate-700 bg-transparent border-none focus:ring-2 focus:ring-inset focus:ring-blue-500 focus:outline-none truncate ${
+                                                                        col.readOnly ? 'cursor-default text-slate-500 italic' : ''
+                                                                    }`}
+                                                                    title={value}
+                                                                />
+                                                            </td>
+                                                        );
+                                                    })}
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        ) : (
+                            <div className="flex flex-col items-center justify-center flex-1 text-slate-400 border-2 border-dashed border-slate-300 rounded-lg bg-slate-50 m-4">
+                                <RefreshCw size={48} className="mb-4 opacity-20" />
+                                <p className="text-lg font-medium">準備就緒</p>
+                                <p className="text-sm">匯入 KML 檔案後，您將看到資料夾結構與經緯度資訊</p>
+                            </div>
+                        )}
+                    </main>
+                </div>
+            );
+        }
+
+        const root = createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
