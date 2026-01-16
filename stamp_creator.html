@@ -1,0 +1,652 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stamp Forge PRO - 御朱印・名城スタンプ數位化平台</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- React & ReactDOM -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    
+    <!-- Babel -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <style>
+        /* Custom Scrollbar */
+        .custom-scrollbar::-webkit-scrollbar { width: 8px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: #262626; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #404040; border-radius: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #525252; }
+        
+        /* Animations */
+        @keyframes fade-in {
+            from { opacity: 0; transform: translateY(-5px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .animate-fade-in { animation: fade-in 0.3s ease-out forwards; }
+        
+        @keyframes bounce-in {
+            0% { transform: translate(-50%, -100%); opacity: 0; }
+            50% { transform: translate(-50%, 10%); opacity: 1; }
+            100% { transform: translate(-50%, 0); opacity: 1; }
+        }
+        .animate-bounce-in { animation: bounce-in 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; }
+    </style>
+</head>
+<body class="bg-neutral-900 text-neutral-100 font-sans">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useRef, useEffect, useCallback } = React;
+
+        // --- 內建圖示庫 (Internal Icons) ---
+        // 直接定義 SVG 元件以避免外部依賴載入失敗的問題
+        const IconBase = ({ children, size = 24, className = "" }) => (
+            <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>{children}</svg>
+        );
+
+        const Upload = (props) => <IconBase {...props}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></IconBase>;
+        const Download = (props) => <IconBase {...props}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></IconBase>;
+        const RotateCw = (props) => <IconBase {...props}><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></IconBase>;
+        const Move = (props) => <IconBase {...props}><polyline points="5 9 2 12 5 15"/><polyline points="9 5 12 2 15 5"/><polyline points="19 9 22 12 19 15"/><polyline points="15 19 12 22 9 19"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="12" y1="2" x2="12" y2="22"/></IconBase>;
+        const ImageIcon = (props) => <IconBase {...props}><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></IconBase>;
+        const Sparkles = (props) => <IconBase {...props}><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/></IconBase>;
+        const Sun = (props) => <IconBase {...props}><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></IconBase>;
+        const Contrast = (props) => <IconBase {...props}><circle cx="12" cy="12" r="10"/><path d="M12 18a6 6 0 0 0 0-12v12z"/></IconBase>;
+        const Droplet = (props) => <IconBase {...props}><path d="M12 22a7 7 0 0 0 7-7c0-2-1-3.9-3-5.5s-3.5-4-4-6.5c-.5 2.5-2 4.9-4 6.5C6 11.1 5 13 5 15a7 7 0 0 0 7 7z"/></IconBase>;
+        const Layers = (props) => <IconBase {...props}><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></IconBase>;
+        const RefreshCcw = (props) => <IconBase {...props}><path d="M3 2v6h6"/><path d="M21 12A9 9 0 0 0 6 5.3L3 8"/><path d="M21 22v-6h-6"/><path d="M3 12a9 9 0 0 0 15 6.7l3-2.7"/></IconBase>;
+        const Check = (props) => <IconBase {...props}><polyline points="20 6 9 17 4 12"/></IconBase>;
+        const Grid = (props) => <IconBase {...props}><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="3" x2="15" y2="21"/></IconBase>;
+        const Link = (props) => <IconBase {...props}><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></IconBase>;
+        const X = (props) => <IconBase {...props}><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></IconBase>;
+        const ArrowRight = (props) => <IconBase {...props}><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></IconBase>;
+        const AlertCircle = (props) => <IconBase {...props}><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></IconBase>;
+        const EyeOff = (props) => <IconBase {...props}><path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"/><path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/><path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61"/><line x1="2" y1="2" x2="22" y2="22"/></IconBase>;
+        const Palette = (props) => <IconBase {...props}><circle cx="13.5" cy="6.5" r=".5" fill="currentColor"/><circle cx="17.5" cy="10.5" r=".5" fill="currentColor"/><circle cx="8.5" cy="7.5" r=".5" fill="currentColor"/><circle cx="6.5" cy="12.5" r=".5" fill="currentColor"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/></IconBase>;
+
+        function StampForge() {
+            const [image, setImage] = useState(null);
+            const [loading, setLoading] = useState(false);
+            const [errorMessage, setErrorMessage] = useState('');
+            const canvasRef = useRef(null);
+            
+            // URL 輸入相關狀態
+            const [showUrlInput, setShowUrlInput] = useState(false);
+            const [urlInput, setUrlInput] = useState('');
+
+            // 編輯參數
+            const [scale, setScale] = useState(1);
+            const [rotation, setRotation] = useState(0);
+            const [position, setPosition] = useState({ x: 0, y: 0 });
+            const [interactionMode, setInteractionMode] = useState('move'); 
+            
+            // 影像處理參數
+            const [brightness, setBrightness] = useState(110); 
+            const [contrast, setContrast] = useState(120);   
+            const [saturation, setSaturation] = useState(130); 
+            const [sharpness, setSharpness] = useState(1);     
+            
+            // 紙張去背進階參數
+            const [paperRemoval, setPaperRemoval] = useState(true); 
+            const [paperTolerance, setPaperTolerance] = useState(50); // 去背容許度 (0-100)
+            const [transparentBg, setTransparentBg] = useState(false); 
+            
+            // 顏色與二值化參數
+            const [inkColorMode, setInkColorMode] = useState('red'); // 'red', 'blue', 'green', 'black', 'custom', 'original'
+            const [customInkHex, setCustomInkHex] = useState('#cc0000'); // 自訂顏色 Hex
+            const [threshold, setThreshold] = useState(0);     
+
+            const CANVAS_SIZE = 1024;
+
+            const showError = (msg) => {
+                setErrorMessage(msg);
+                setTimeout(() => setErrorMessage(''), 4000);
+            };
+
+            const resetImageSettings = (img) => {
+                const initialScale = Math.min(3, Math.max(CANVAS_SIZE / img.width, CANVAS_SIZE / img.height));
+                setScale(initialScale);
+                setRotation(0);
+                setPosition({ x: 0, y: 0 });
+            };
+
+            // 輔助：Hex 轉 RGB
+            const hexToRgb = (hex) => {
+                const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+                return result ? {
+                r: parseInt(result[1], 16),
+                g: parseInt(result[2], 16),
+                b: parseInt(result[3], 16)
+                } : { r: 0, g: 0, b: 0 };
+            };
+
+            const handleImageUpload = (e) => {
+                const file = e.target.files[0];
+                if (file) {
+                setLoading(true);
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                    const img = new Image();
+                    img.onload = () => {
+                    setImage(img);
+                    resetImageSettings(img);
+                    setLoading(false);
+                    };
+                    img.onerror = () => {
+                        setLoading(false);
+                        showError("圖片讀取失敗，檔案可能已損毀。");
+                    };
+                    img.src = event.target.result;
+                };
+                reader.readAsDataURL(file);
+                }
+            };
+
+            const handleUrlSubmit = (e) => {
+                e.preventDefault();
+                if (!urlInput.trim()) return;
+                setLoading(true);
+                const img = new Image();
+                img.crossOrigin = "Anonymous"; 
+                img.onload = () => {
+                    setImage(img);
+                    resetImageSettings(img);
+                    setLoading(false);
+                    setShowUrlInput(false);
+                    setUrlInput('');
+                };
+                img.onerror = () => {
+                    setLoading(false);
+                    showError("無法讀取圖片。可能是網址錯誤，或該網站禁止跨來源 (CORS) 存取。");
+                };
+                img.src = urlInput;
+            };
+
+            const applySharpen = (ctx, width, height, amount) => {
+                if (amount <= 0) return;
+                const imageData = ctx.getImageData(0, 0, width, height);
+                const data = imageData.data;
+                const w = width;
+                const mix = amount * 0.5; 
+                const copy = new Uint8ClampedArray(data);
+
+                for (let y = 1; y < height - 1; y++) {
+                for (let x = 1; x < width - 1; x++) {
+                    const i = (y * w + x) * 4;
+                    if (data[i+3] === 0) continue; // Skip transparent
+                    for (let c = 0; c < 3; c++) {
+                    const center = copy[i + c];
+                    const top = copy[i - w * 4 + c];
+                    const bottom = copy[i + w * 4 + c];
+                    const left = copy[i - 4 + c];
+                    const right = copy[i + 4 + c];
+                    const newVal = (center * 5) - (top + bottom + left + right);
+                    data[i + c] = center * (1 - mix) + newVal * mix;
+                    }
+                }
+                }
+                ctx.putImageData(imageData, 0, 0);
+            };
+
+            const drawCanvas = useCallback(() => {
+                const canvas = canvasRef.current;
+                if (!canvas || !image) return;
+                
+                const ctx = canvas.getContext('2d', { willReadFrequently: true });
+                
+                // 1. Clear & Fill Background
+                ctx.clearRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
+                if (!transparentBg) {
+                    ctx.fillStyle = '#FFFFFF';
+                    ctx.fillRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
+                }
+
+                // 2. Draw Image (Geometry)
+                ctx.save();
+                ctx.translate(CANVAS_SIZE / 2 + position.x, CANVAS_SIZE / 2 + position.y);
+                ctx.rotate((rotation * Math.PI) / 180);
+                ctx.scale(scale, scale);
+                try {
+                    ctx.drawImage(image, -image.width / 2, -image.height / 2);
+                } catch (err) {
+                    console.error("Draw error", err);
+                }
+                ctx.restore();
+
+                // 3. Pixel Manipulation
+                try {
+                    const imageData = ctx.getImageData(0, 0, CANVAS_SIZE, CANVAS_SIZE);
+                    const data = imageData.data;
+                    
+                    // Pre-calc constants
+                    const contrastFactor = (259 * (contrast + 255)) / (255 * (259 - contrast));
+                    const customRGB = hexToRgb(customInkHex); // For custom color mode
+                    
+                    // Paper threshold calculation (255 - tolerance*2)
+                    const paperLimit = 255 - (paperTolerance * 2); 
+
+                    for (let i = 0; i < data.length; i += 4) {
+                    if (data[i+3] === 0) continue;
+
+                    let r = data[i];
+                    let g = data[i + 1];
+                    let b = data[i + 2];
+
+                    // --- A. 基礎調整 (Brightness/Contrast/Sat) ---
+                    r = contrastFactor * (r - 128) + 128;
+                    g = contrastFactor * (g - 128) + 128;
+                    b = contrastFactor * (b - 128) + 128;
+
+                    r += (brightness - 100) * 2.5;
+                    g += (brightness - 100) * 2.5;
+                    b += (brightness - 100) * 2.5;
+
+                    const gray = 0.2989 * r + 0.5870 * g + 0.1140 * b;
+                    const sat = saturation / 100;
+                    r = gray + (r - gray) * sat;
+                    g = gray + (g - gray) * sat;
+                    b = gray + (b - gray) * sat;
+
+                    // --- B. 紙張去背 (Paper Removal) ---
+                    let isPaper = false;
+                    if (paperRemoval) {
+                        const minChannel = Math.min(r, Math.min(g, b));
+                        if (minChannel > paperLimit) {
+                            isPaper = true;
+                            if (transparentBg) {
+                                data[i + 3] = 0; 
+                                continue; 
+                            } else {
+                                r = 255; g = 255; b = 255; 
+                            }
+                        }
+                    }
+
+                    if (isPaper && threshold === 0) {
+                        data[i] = r; data[i+1] = g; data[i+2] = b;
+                        continue;
+                    }
+
+                    // --- C. 印章顏色增強 (Ink Enhancement) ---
+                    if (threshold === 0 && inkColorMode !== 'original' && inkColorMode !== 'custom') {
+                        if (inkColorMode === 'red') {
+                            if (r > g && r > b) { r = Math.min(255, r * 1.1); g *= 0.9; b *= 0.9; }
+                        } else if (inkColorMode === 'blue') {
+                            if (b > r && b > g) { b = Math.min(255, b * 1.1); r *= 0.9; g *= 0.9; }
+                        } else if (inkColorMode === 'green') {
+                            if (g > r && g > b) { g = Math.min(255, g * 1.1); r *= 0.9; b *= 0.9; }
+                        } else if (inkColorMode === 'black') {
+                            let mono = 0.2989 * r + 0.5870 * g + 0.1140 * b;
+                            if (mono < 150) mono *= 0.8;
+                            r = g = b = mono;
+                        }
+                    }
+
+                    // --- D. 二值化與著色 (Threshold & Colorize) ---
+                    if (threshold > 0) {
+                        const v = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+                        const isInk = v < threshold && !isPaper;
+
+                        if (isInk) {
+                            if (inkColorMode === 'custom') {
+                                r = customRGB.r; g = customRGB.g; b = customRGB.b;
+                            } else if (inkColorMode === 'original') {
+                                r = g = b = 0;
+                            } else {
+                                if (inkColorMode === 'red') { r = 253; g = 26; b = 55; }
+                                else if (inkColorMode === 'blue') { r = 45; g = 168; b = 246; }
+                                else if (inkColorMode === 'green') { r = 20; g = 180; b = 40; }
+                                else { r = 0; g = 0; b = 0; }
+                            }
+                        } else {
+                            if (transparentBg) {
+                                data[i + 3] = 0;
+                            } else {
+                                r = 255; g = 255; b = 255;
+                            }
+                        }
+                    }
+
+                    data[i] = Math.min(255, Math.max(0, r));
+                    data[i + 1] = Math.min(255, Math.max(0, g));
+                    data[i + 2] = Math.min(255, Math.max(0, b));
+                    }
+                    
+                    ctx.putImageData(imageData, 0, 0);
+
+                    if (sharpness > 0 && threshold === 0) {
+                        applySharpen(ctx, CANVAS_SIZE, CANVAS_SIZE, sharpness);
+                    }
+                } catch (e) {
+                    if (!errorMessage) console.warn("Canvas Tainted - CORS issue");
+                }
+
+            }, [image, scale, rotation, position, brightness, contrast, saturation, sharpness, threshold, paperRemoval, paperTolerance, transparentBg, inkColorMode, customInkHex, errorMessage]);
+
+            useEffect(() => {
+                let frameId;
+                const render = () => { drawCanvas(); frameId = null; };
+                frameId = requestAnimationFrame(render);
+                return () => { if(frameId) cancelAnimationFrame(frameId); }
+            }, [drawCanvas]);
+
+
+            const handleDownload = () => {
+                const canvas = canvasRef.current;
+                if (!canvas) return;
+                try {
+                    const link = document.createElement('a');
+                    link.download = `stamp_${inkColorMode}_${Date.now()}.png`;
+                    link.href = canvas.toDataURL('image/png', 1.0);
+                    link.click();
+                } catch (e) {
+                    showError("無法下載：畫布受到跨來源資源限制 (CORS)。");
+                }
+            };
+
+            const [isDragging, setIsDragging] = useState(false);
+            const [lastMousePos, setLastMousePos] = useState({ x: 0, y: 0 });
+
+            const handleMouseDown = (e) => {
+                setIsDragging(true);
+                setLastMousePos({ x: e.clientX, y: e.clientY });
+            };
+
+            const handleMouseMove = (e) => {
+                if (!isDragging) return;
+                const dx = e.clientX - lastMousePos.x;
+                const dy = e.clientY - lastMousePos.y;
+                if (interactionMode === 'move') setPosition(prev => ({ x: prev.x + dx, y: prev.y + dy }));
+                else if (interactionMode === 'rotate') setRotation(prev => prev + dx * 0.5);
+                setLastMousePos({ x: e.clientX, y: e.clientY });
+            };
+            const handleMouseUp = () => setIsDragging(false);
+            const handleWheel = (e) => {
+                e.preventDefault();
+                const delta = e.deltaY * -0.001; 
+                setScale(Math.min(10, Math.max(0.1, scale + delta * scale))); 
+            };
+
+            return (
+                <div className="min-h-screen bg-neutral-900 text-neutral-100 font-sans flex flex-col">
+                {errorMessage && (
+                    <div className="fixed top-20 left-1/2 -translate-x-1/2 bg-red-600/90 text-white px-6 py-3 rounded-lg shadow-xl z-50 flex items-center gap-3 animate-bounce-in backdrop-blur-sm border border-red-500">
+                        <AlertCircle size={20} />
+                        <span className="text-sm font-medium">{errorMessage}</span>
+                    </div>
+                )}
+
+                <header className="bg-neutral-800 border-b border-neutral-700 p-4 flex justify-between items-center shadow-md z-10 shrink-0">
+                    <div className="flex items-center gap-3">
+                    <div className="bg-red-700 p-2 rounded-lg">
+                        <Layers className="w-6 h-6 text-white" />
+                    </div>
+                    <div>
+                        <h1 className="text-xl font-bold tracking-wider text-white">Stamp Forge <span className="text-red-500 text-sm align-top">PRO</span></h1>
+                        <p className="text-xs text-neutral-400">御朱印・名城スタンプ數位化平台</p>
+                    </div>
+                    </div>
+                    <div className="flex gap-4">
+                    {image && (
+                        <button 
+                            onClick={() => {
+                                setBrightness(110); setContrast(120); setSaturation(130);
+                                setSharpness(1); setPaperRemoval(true); setThreshold(0);
+                                setScale(1); setRotation(0); setPosition({x:0, y:0});
+                                setTransparentBg(false); setInkColorMode('red'); setPaperTolerance(50);
+                            }}
+                            className="flex items-center gap-2 px-3 py-1.5 text-xs text-neutral-400 hover:text-white bg-neutral-700/50 hover:bg-neutral-700 rounded transition-colors"
+                        >
+                            <RefreshCcw size={14}/> 重置參數
+                        </button>
+                    )}
+                    </div>
+                </header>
+
+                <div className="flex flex-1 overflow-hidden">
+                    {/* Sidebar */}
+                    <aside className="w-80 bg-neutral-800 border-r border-neutral-700 p-5 overflow-y-auto custom-scrollbar flex flex-col gap-6 shadow-xl z-10 shrink-0">
+                    {!image ? (
+                        <div className="flex flex-col items-center justify-center h-full text-center space-y-4 opacity-50">
+                            <p>請先匯入圖片以啟用工具</p>
+                        </div>
+                    ) : (
+                        <>
+                        {/* Interaction Mode */}
+                        <div className="flex bg-neutral-900 p-1 rounded-lg">
+                            <button 
+                                onClick={() => setInteractionMode('move')}
+                                className={`flex-1 py-2 rounded-md flex items-center justify-center gap-2 text-sm font-medium transition-all ${interactionMode === 'move' ? 'bg-neutral-700 text-white shadow' : 'text-neutral-500 hover:text-neutral-300'}`}
+                            >
+                                <Move size={16}/> 移動
+                            </button>
+                            <button 
+                                onClick={() => setInteractionMode('rotate')}
+                                className={`flex-1 py-2 rounded-md flex items-center justify-center gap-2 text-sm font-medium transition-all ${interactionMode === 'rotate' ? 'bg-neutral-700 text-white shadow' : 'text-neutral-500 hover:text-neutral-300'}`}
+                            >
+                                <RotateCw size={16}/> 旋轉
+                            </button>
+                        </div>
+
+                        {/* Geometry Tools */}
+                        <div className="space-y-4">
+                            <div className="flex items-center gap-2 mb-1 text-red-400 border-b border-red-900/30 pb-2">
+                            <h3 className="font-bold text-xs uppercase tracking-wide">幾何調整</h3>
+                            </div>
+                            <div className="space-y-1">
+                                <div className="flex justify-between text-xs text-neutral-400 items-center">
+                                    <span>縮放 (Zoom)</span>
+                                    <input type="number" step="0.1" value={Math.round(scale*100)/100} onChange={e => setScale(Number(e.target.value))} className="w-16 bg-neutral-900 border border-neutral-700 rounded px-1 py-0.5 text-right text-white focus:outline-none focus:border-red-500"/>
+                                </div>
+                                <input type="range" min="0.1" max="10" step="0.1" value={scale} onChange={(e) => setScale(parseFloat(e.target.value))} className="w-full accent-red-600 h-1 bg-neutral-600 rounded-lg appearance-none cursor-pointer"/>
+                            </div>
+                            <div className="space-y-1">
+                                <div className="flex justify-between text-xs text-neutral-400 items-center">
+                                    <span>旋轉 (Rotate)</span>
+                                    <div className="flex items-center gap-1">
+                                        <input type="number" step="0.1" value={Math.round(rotation*10)/10} onChange={e => setRotation(Number(e.target.value))} className="w-16 bg-neutral-900 border border-neutral-700 rounded px-1 py-0.5 text-right text-white focus:outline-none focus:border-red-500"/>
+                                        <span className="text-[10px]">°</span>
+                                    </div>
+                                </div>
+                                <input type="range" min="-180" max="180" step="0.1" value={rotation} onChange={(e) => setRotation(parseFloat(e.target.value))} className="w-full accent-red-600 h-1 bg-neutral-600 rounded-lg appearance-none cursor-pointer"/>
+                            </div>
+                        </div>
+
+                        {/* Ink & Paper Tools */}
+                        <div className="space-y-4">
+                            <div className="flex items-center gap-2 mb-1 text-blue-400 border-b border-blue-900/30 pb-2">
+                            <h3 className="font-bold text-xs uppercase tracking-wide">印泥與背景</h3>
+                            </div>
+
+                            {/* Paper Removal & Tolerance */}
+                            <div className="bg-neutral-900/50 p-3 rounded-lg space-y-3 border border-neutral-700">
+                                <div className="flex items-center justify-between">
+                                    <span className="text-xs text-neutral-300 flex items-center gap-2">
+                                        <EyeOff size={14}/> 去除紙張雜色
+                                    </span>
+                                    <button 
+                                        onClick={() => setPaperRemoval(!paperRemoval)}
+                                        className={`w-10 h-5 rounded-full relative transition-colors ${paperRemoval ? 'bg-red-600' : 'bg-neutral-600'}`}
+                                    >
+                                        <div className={`absolute w-3 h-3 bg-white rounded-full top-1 transition-transform ${paperRemoval ? 'left-6' : 'left-1'}`}></div>
+                                    </button>
+                                </div>
+                                
+                                {/* Tolerance Slider */}
+                                {paperRemoval && (
+                                    <div className="space-y-1 pt-1 animate-fade-in">
+                                        <div className="flex justify-between text-[10px] text-neutral-400">
+                                            <span>弱 (僅白紙)</span>
+                                            <span>強 (含陰影)</span>
+                                        </div>
+                                        <input 
+                                            type="range" min="0" max="100" 
+                                            value={paperTolerance} onChange={(e) => setPaperTolerance(parseInt(e.target.value))}
+                                            className="w-full accent-red-500 h-1 bg-neutral-600 rounded-lg appearance-none cursor-pointer"
+                                            title="去背強度：數值越高，越暗的背景也會被去除"
+                                        />
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* Transparency */}
+                            <div className="flex items-center justify-between px-1">
+                                <span className="text-xs text-neutral-300 flex items-center gap-2">
+                                    <Grid size={14}/> 透明背景模式
+                                </span>
+                                <button 
+                                    onClick={() => setTransparentBg(!transparentBg)}
+                                    className={`w-10 h-5 rounded-full relative transition-colors ${transparentBg ? 'bg-blue-600' : 'bg-neutral-600'}`}
+                                >
+                                    <div className={`absolute w-3 h-3 bg-white rounded-full top-1 transition-transform ${transparentBg ? 'left-6' : 'left-1'}`}></div>
+                                </button>
+                            </div>
+
+                            {/* Ink Color Selection */}
+                            <div className="space-y-2 pt-2">
+                                <span className="text-xs text-neutral-400 block">印泥目標顏色</span>
+                                <div className="grid grid-cols-6 gap-2">
+                                    {[
+                                        { id: 'red', color: 'bg-[#fd1a37]', label: '紅' },
+                                        { id: 'blue', color: 'bg-[#2da8f6]', label: '藍' },
+                                        { id: 'green', color: 'bg-green-600', label: '綠' },
+                                        { id: 'black', color: 'bg-neutral-900 border border-neutral-600', label: '黑' },
+                                        { id: 'original', color: 'bg-gradient-to-br from-red-500 via-green-500 to-blue-500', label: '原' },
+                                        { id: 'custom', color: 'bg-white', label: '自訂', icon: <Palette size={12} className="text-neutral-800"/> },
+                                    ].map((ink) => (
+                                        <button
+                                            key={ink.id}
+                                            onClick={() => setInkColorMode(ink.id)}
+                                            className={`h-8 rounded-md flex items-center justify-center transition-all ${ink.color} ${inkColorMode === ink.id ? 'ring-2 ring-white scale-110 shadow-lg' : 'opacity-60 hover:opacity-100'} overflow-hidden relative`}
+                                            title={ink.label}
+                                        >
+                                            {ink.id === 'custom' && inkColorMode === 'custom' && (
+                                                <div className="absolute inset-0" style={{backgroundColor: customInkHex}}></div>
+                                            )}
+                                            {ink.id === 'custom' ? ink.icon : (inkColorMode === ink.id && <Check size={12} className="text-white drop-shadow-md"/>)}
+                                        </button>
+                                    ))}
+                                </div>
+                                {/* Custom Color Picker Input */}
+                                {inkColorMode === 'custom' && (
+                                    <div className="flex items-center gap-2 mt-2 bg-neutral-900 p-2 rounded border border-neutral-700 animate-fade-in">
+                                        <input 
+                                            type="color" 
+                                            value={customInkHex}
+                                            onChange={(e) => setCustomInkHex(e.target.value)}
+                                            className="w-6 h-6 rounded cursor-pointer border-none bg-transparent"
+                                        />
+                                        <span className="text-xs text-neutral-400 font-mono">{customInkHex}</span>
+                                        <span className="text-[10px] text-neutral-500 ml-auto">二值化填色用</span>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+
+                        {/* Advanced Adjustments */}
+                        <div className="space-y-4">
+                            <div className="space-y-1">
+                                <div className="flex justify-between text-xs text-neutral-400">
+                                    <span className="flex items-center gap-1">對比度</span>
+                                    <span>{contrast}%</span>
+                                </div>
+                                <input type="range" min="50" max="200" value={contrast} onChange={(e) => setContrast(parseInt(e.target.value))} className="w-full accent-blue-500 h-1 bg-neutral-600 rounded-lg appearance-none cursor-pointer"/>
+                            </div>
+                            <div className="space-y-1">
+                                <div className="flex justify-between text-xs text-neutral-400">
+                                    <span className="flex items-center gap-1">鮮豔度</span>
+                                    <span>{saturation}%</span>
+                                </div>
+                                <input type="range" min="0" max="200" value={saturation} onChange={(e) => setSaturation(parseInt(e.target.value))} className="w-full accent-blue-500 h-1 bg-neutral-600 rounded-lg appearance-none cursor-pointer"/>
+                            </div>
+                            <div className="space-y-1">
+                                <div className="flex justify-between text-xs text-neutral-400">
+                                    <span className="flex items-center gap-1">銳利化</span>
+                                    <span>{sharpness}</span>
+                                </div>
+                                <input type="range" min="0" max="3" step="0.1" value={sharpness} onChange={(e) => setSharpness(parseFloat(e.target.value))} className="w-full accent-blue-500 h-1 bg-neutral-600 rounded-lg appearance-none cursor-pointer"/>
+                            </div>
+                        </div>
+
+                        <hr className="border-neutral-700" />
+
+                        <div className="space-y-2 opacity-80 hover:opacity-100 transition-opacity bg-neutral-900/30 p-2 rounded">
+                            <div className="flex justify-between text-xs text-neutral-400">
+                                <span>二值化閾值 (Threshold)</span>
+                                <span>{threshold}</span>
+                            </div>
+                            <input type="range" min="0" max="255" value={threshold} onChange={(e) => setThreshold(parseInt(e.target.value))} className="w-full accent-gray-400 h-1 bg-neutral-600 rounded-lg appearance-none cursor-pointer"/>
+                            <p className="text-[10px] text-neutral-500">提示：開啟此模式後，將套用「印泥目標顏色」填滿印章</p>
+                        </div>
+                        </>
+                    )}
+                    </aside>
+
+                    {/* Main Canvas */}
+                    <main className="flex-1 bg-neutral-950 relative overflow-hidden flex flex-col items-center justify-center p-8">
+                    {!image && <div className="absolute inset-0 z-0 flex items-center justify-center pointer-events-none"><div className="text-neutral-700 font-bold text-8xl opacity-10 select-none">STAMP</div></div>}
+                    <div 
+                        className="relative shadow-2xl"
+                        style={{
+                            width: '512px', height: '512px',
+                            backgroundImage: 'repeating-linear-gradient(45deg, #333 0, #333 10px, #444 10px, #444 20px)',
+                            cursor: image ? (interactionMode === 'rotate' ? 'ew-resize' : (isDragging ? 'grabbing' : 'grab')) : 'default'
+                        }}
+                        onMouseDown={image ? handleMouseDown : undefined}
+                        onMouseMove={image ? handleMouseMove : undefined}
+                        onMouseUp={image ? handleMouseUp : undefined}
+                        onMouseLeave={handleMouseUp}
+                        onWheel={image ? handleWheel : undefined}
+                    >
+                        <canvas ref={canvasRef} width={CANVAS_SIZE} height={CANVAS_SIZE} className="w-full h-full object-contain block touch-none"/>
+                        {!image && <div className="absolute inset-0 flex flex-col items-center justify-center text-neutral-400 bg-neutral-900/50 backdrop-blur-sm"><ImageIcon className="w-12 h-12 mb-2 opacity-50" /><p className="text-sm font-medium">請匯入圖片</p></div>}
+                    </div>
+                    <div className="mt-4 flex gap-4 text-xs text-neutral-500 font-mono items-center">
+                        <span>{CANVAS_SIZE} x {CANVAS_SIZE}px PNG</span>
+                        {image && interactionMode === 'rotate' && <span className="text-red-400 animate-pulse">左右拖曳以旋轉</span>}
+                        {image && interactionMode === 'move' && <span className="text-blue-400">拖曳以移動 (滾輪縮放)</span>}
+                    </div>
+
+                    <div className="absolute bottom-8 left-1/2 -translate-x-1/2 flex gap-3 bg-neutral-800/95 backdrop-blur-md p-2 rounded-xl border border-neutral-700 shadow-2xl transition-all w-auto max-w-[90vw]">
+                        {showUrlInput ? (
+                            <form onSubmit={handleUrlSubmit} className="flex items-center gap-2 px-1">
+                                <input type="url" placeholder="https://..." className="bg-neutral-900 border border-neutral-600 text-white rounded px-3 py-2 w-64 text-sm focus:outline-none focus:border-red-500 transition-all" value={urlInput} onChange={(e) => setUrlInput(e.target.value)} autoFocus/>
+                                <button type="submit" className="bg-red-600 hover:bg-red-500 text-white p-2 rounded hover:shadow-lg transition-all"><ArrowRight size={20} /></button>
+                                <button type="button" onClick={() => setShowUrlInput(false)} className="bg-neutral-700 hover:bg-neutral-600 text-neutral-300 p-2 rounded transition-all"><X size={20} /></button>
+                            </form>
+                        ) : (
+                            <>
+                                <label className="flex items-center gap-2 px-5 py-3 bg-neutral-700 hover:bg-neutral-600 text-white rounded-lg cursor-pointer transition-all active:scale-95 group border border-neutral-600">
+                                    <Upload size={18} className="group-hover:-translate-y-0.5 transition-transform"/>
+                                    <span className="font-medium">上傳</span>
+                                    <input type="file" accept="image/*" onChange={handleImageUpload} className="hidden" />
+                                </label>
+                                <button onClick={() => setShowUrlInput(true)} className="flex items-center gap-2 px-4 py-3 bg-neutral-700 hover:bg-neutral-600 text-white rounded-lg transition-all active:scale-95 border border-neutral-600" title="從網址匯入"><Link size={18} /></button>
+                                {image && (
+                                    <>
+                                        <div className="w-px h-8 bg-neutral-600 mx-1 self-center"></div>
+                                        <button onClick={handleDownload} className="flex items-center gap-2 px-6 py-3 bg-red-700 hover:bg-red-600 text-white rounded-lg shadow-lg shadow-red-900/30 transition-all active:scale-95 group border border-red-500/50">
+                                            <Download size={18} className="group-hover:translate-y-0.5 transition-transform"/>
+                                            <span className="font-medium">下載</span>
+                                        </button>
+                                    </>
+                                )}
+                            </>
+                        )}
+                    </div>
+                    </main>
+                </div>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<StampForge />);
+    </script>
+</body>
+</html>
